@@ -2,6 +2,9 @@ package goose
 
 import (
 	"database/sql"
+	"fmt"
+	"log"
+
 	"github.com/mattn/go-sqlite3"
 )
 
@@ -11,6 +14,7 @@ type SqlDialect interface {
 	createVersionTableSql() string // sql string to create the goose_db_version table
 	insertVersionSql() string      // sql string to insert the initial version table row
 	dbVersionQuery(db *sql.DB) (*sql.Rows, error)
+	dbCheckSumQuery(db *sql.DB, version int64) (string, error)
 }
 
 // drivers that we don't know about can ask for a dialect by name
@@ -38,13 +42,14 @@ func (pg PostgresDialect) createVersionTableSql() string {
             	id serial NOT NULL,
                 version_id bigint NOT NULL,
                 is_applied boolean NOT NULL,
+                checksum VARCHAR (50) NOT NULL,
                 tstamp timestamp NULL default now(),
                 PRIMARY KEY(id)
             );`
 }
 
 func (pg PostgresDialect) insertVersionSql() string {
-	return "INSERT INTO goose_db_version (version_id, is_applied) VALUES ($1, $2);"
+	return "INSERT INTO goose_db_version (version_id, is_applied, checksum) VALUES ($1, $2, $3);"
 }
 
 func (pg PostgresDialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
@@ -58,6 +63,31 @@ func (pg PostgresDialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
 	}
 
 	return rows, err
+}
+func (pg PostgresDialect) dbCheckSumQuery(db *sql.DB, version int64) (string, error) {
+	var checksum string
+	query := fmt.Sprintf("SELECT checksum from goose_db_version WHERE version_id = %d", version)
+	log.Println("query to execute:", query)
+	rows, err := db.Query(query)
+	log.Println("row retrived from db:", rows)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		err := rows.Scan(&checksum)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println(checksum)
+	}
+	err = rows.Err()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return checksum, nil
 }
 
 ////////////////////////////
@@ -93,6 +123,10 @@ func (m MySqlDialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
 	return rows, err
 }
 
+func (m MySqlDialect) dbCheckSumQuery(db *sql.DB, version int64) (string, error) {
+	return "", nil
+}
+
 ////////////////////////////
 // sqlite3
 ////////////////////////////
@@ -120,4 +154,8 @@ func (m Sqlite3Dialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
 		return nil, ErrTableDoesNotExist
 	}
 	return rows, err
+}
+
+func (m Sqlite3Dialect) dbCheckSumQuery(db *sql.DB, version int64) (string, error) {
+	return "", nil
 }

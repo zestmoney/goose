@@ -3,8 +3,11 @@ package goose
 import (
 	"bufio"
 	"bytes"
+	"crypto/md5"
 	"database/sql"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -146,7 +149,12 @@ func runSQLMigration(conf *DBConf, db *sql.DB, scriptFile string, v int64, direc
 	if err != nil {
 		log.Fatal(err)
 	}
+	data, err := ioutil.ReadFile(scriptFile)
+	if err != nil {
+		fmt.Print(err)
+	}
 
+	md5str, err := getMD5AsString(data)
 	// find each statement, checking annotations for up/down direction
 	// and execute each of them in the current transaction.
 	// Commits the transaction if successfully applied each statement and
@@ -160,9 +168,36 @@ func runSQLMigration(conf *DBConf, db *sql.DB, scriptFile string, v int64, direc
 		}
 	}
 
-	if err = FinalizeMigration(conf, txn, direction, v); err != nil {
+	if err = FinalizeMigration(conf, txn, direction, v, md5str); err != nil {
 		log.Fatalf("error finalizing migration %s, quitting. (%v)", filepath.Base(scriptFile), err)
 	}
 
 	return nil
+}
+
+func validateChecksum(conf *DBConf, db *sql.DB, scriptFile string, v int64) {
+
+	data, err := ioutil.ReadFile(scriptFile)
+	if err != nil {
+		fmt.Print(err)
+	}
+	log.Println("procesing file :", scriptFile)
+	md5str, err := getMD5AsString(data)
+	log.Println("md5 string for file:", md5str)
+	checksum, err := conf.Driver.Dialect.dbCheckSumQuery(db, v)
+	log.Println("checksum from db:", checksum)
+	if err != nil {
+		fmt.Print(err)
+	}
+
+	if md5str != checksum {
+		log.Fatal("checksum mismatch for file:", scriptFile)
+	}
+}
+
+func getMD5AsString(data []byte) (string, error) {
+	md5 := md5.Sum(data)
+	md5str := fmt.Sprintf("%x\n", md5)
+
+	return md5str, nil
 }

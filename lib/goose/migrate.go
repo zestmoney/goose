@@ -30,6 +30,10 @@ type MigrationRecord struct {
 	IsApplied bool // was this a result of up() or down()
 }
 
+type CheckSumRecord struct {
+	Checksum string
+}
+
 type Migration struct {
 	Version  int64
 	Next     int64  // next version, or -1 if none
@@ -64,6 +68,15 @@ func RunMigrationsOnDb(conf *DBConf, migrationsDir string, target int64, db *sql
 	current, err := EnsureDBVersion(conf, db)
 	if err != nil {
 		return err
+	}
+
+	migs, err := PreviousMigrations(migrationsDir, current)
+	if err != nil {
+		return err
+	}
+
+	for _, m := range migs {
+		validateChecksum(conf, db, m.Source, m.Version)
 	}
 
 	migrations, err := CollectMigrations(migrationsDir, current, target)
@@ -125,6 +138,34 @@ func CollectMigrations(dirpath string, current, target int64) (m []*Migration, e
 			}
 		}
 
+		return nil
+	})
+
+	return m, nil
+}
+
+// collect all the valid looking migration scripts in the
+// migrations folder, and key them by version
+func PreviousMigrations(dirpath string, current int64) (m []*Migration, err error) {
+
+	// extract the numeric component of each migration,
+	// filter out any uninteresting files,
+	// and ensure we only have one file per migration version.
+	filepath.Walk(dirpath, func(name string, info os.FileInfo, err error) error {
+
+		if v, e := NumericComponent(name); e == nil {
+
+			for _, g := range m {
+				if v == g.Version {
+					log.Fatalf("more than one file specifies the migration for version %d (%s and %s)",
+						v, g.Source, filepath.Join(dirpath, name))
+				}
+			}
+
+			if v <= current {
+				m = append(m, newMigration(v, name))
+			}
+		}
 		return nil
 	})
 
@@ -257,7 +298,9 @@ func createVersionTable(conf *DBConf, db *sql.DB) error {
 
 	version := 0
 	applied := true
-	if _, err := txn.Exec(d.insertVersionSql(), version, applied); err != nil {
+	b := []byte(" ")
+	md5, _ := getMD5AsString(b)
+	if _, err := txn.Exec(d.insertVersionSql(), version, applied, md5); err != nil {
 		txn.Rollback()
 		return err
 	}
@@ -372,11 +415,11 @@ func CreateMigration(name, migrationType, dir string, t time.Time) (path string,
 
 // Update the version table for the given migration,
 // and finalize the transaction.
-func FinalizeMigration(conf *DBConf, txn *sql.Tx, direction bool, v int64) error {
+func FinalizeMigration(conf *DBConf, txn *sql.Tx, direction bool, v int64, checksum string) error {
 
 	// XXX: drop goose_db_version table on some minimum version number?
 	stmt := conf.Driver.Dialect.insertVersionSql()
-	if _, err := txn.Exec(stmt, v, direction); err != nil {
+	if _, err := txn.Exec(stmt, v, direction, checksum); err != nil {
 		txn.Rollback()
 		return err
 	}
