@@ -65,6 +65,48 @@ func (pg PostgresDialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
 	return rows, err
 }
 func (pg PostgresDialect) dbCheckSumQuery(db *sql.DB, version int64) (string, error) {
+	return getCheckSum(db, version)
+}
+
+////////////////////////////
+// MySQL
+////////////////////////////
+
+type MySqlDialect struct{}
+
+func (m MySqlDialect) createVersionTableSql() string {
+	return `CREATE TABLE goose_db_version (
+                id serial NOT NULL,
+                version_id bigint NOT NULL,
+                is_applied boolean NOT NULL,
+				checksum VARCHAR (50) NOT NULL,
+                tstamp timestamp NULL default now(),
+                PRIMARY KEY(id)
+            );`
+}
+
+func (m MySqlDialect) insertVersionSql() string {
+	return "INSERT INTO goose_db_version (version_id, is_applied, checksum) VALUES (?, ?, ?);"
+}
+
+func (m MySqlDialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
+	rows, err := db.Query("SELECT version_id, is_applied from goose_db_version ORDER BY id DESC")
+
+	// XXX: check for mysql specific error indicating the table doesn't exist.
+	// for now, assume any error is because the table doesn't exist,
+	// in which case we'll try to create it.
+	if err != nil {
+		return nil, ErrTableDoesNotExist
+	}
+
+	return rows, err
+}
+
+func (m MySqlDialect) dbCheckSumQuery(db *sql.DB, version int64) (string, error) {
+	return getCheckSum(db, version)
+}
+
+func getCheckSum(db *sql.DB, version int64) (string, error) {
 	var checksum string
 	query := fmt.Sprintf("SELECT checksum from goose_db_version WHERE version_id = %d", version)
 	log.Println("query to execute:", query)
@@ -88,43 +130,6 @@ func (pg PostgresDialect) dbCheckSumQuery(db *sql.DB, version int64) (string, er
 	}
 
 	return checksum, nil
-}
-
-////////////////////////////
-// MySQL
-////////////////////////////
-
-type MySqlDialect struct{}
-
-func (m MySqlDialect) createVersionTableSql() string {
-	return `CREATE TABLE goose_db_version (
-                id serial NOT NULL,
-                version_id bigint NOT NULL,
-                is_applied boolean NOT NULL,
-                tstamp timestamp NULL default now(),
-                PRIMARY KEY(id)
-            );`
-}
-
-func (m MySqlDialect) insertVersionSql() string {
-	return "INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, ?);"
-}
-
-func (m MySqlDialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
-	rows, err := db.Query("SELECT version_id, is_applied from goose_db_version ORDER BY id DESC")
-
-	// XXX: check for mysql specific error indicating the table doesn't exist.
-	// for now, assume any error is because the table doesn't exist,
-	// in which case we'll try to create it.
-	if err != nil {
-		return nil, ErrTableDoesNotExist
-	}
-
-	return rows, err
-}
-
-func (m MySqlDialect) dbCheckSumQuery(db *sql.DB, version int64) (string, error) {
-	return "", nil
 }
 
 ////////////////////////////
@@ -157,5 +162,6 @@ func (m Sqlite3Dialect) dbVersionQuery(db *sql.DB) (*sql.Rows, error) {
 }
 
 func (m Sqlite3Dialect) dbCheckSumQuery(db *sql.DB, version int64) (string, error) {
+	panic("Check sum column is not present in goose_db_version table, Hence can't retrive it")
 	return "", nil
 }
